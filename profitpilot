@@ -1,0 +1,305 @@
+📁 Project Structure
+bash
+Copy
+Edit
+profitpilot/
+│
+├── frontend/          # React + Tailwind dashboard
+├── backend/           # Node.js API
+├── ai-service/        # Python ML microservice
+├── db/                # Postgres init scripts
+├── docker-compose.yml
+└── README.md
+📄 docker-compose.yml
+yaml
+Copy
+Edit
+version: '3.9'
+services:
+  db:
+    image: postgres:15
+    container_name: profitpilot_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: profitpilot
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    container_name: profitpilot_backend
+    restart: always
+    depends_on:
+      - db
+      - ai-service
+    environment:
+      DB_HOST: db
+      DB_USER: admin
+      DB_PASSWORD: secret
+      DB_NAME: profitpilot
+      AI_SERVICE_URL: http://ai-service:5000
+    ports:
+      - "4000:4000"
+
+  ai-service:
+    build: ./ai-service
+    container_name: profitpilot_ai
+    restart: always
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build: ./frontend
+    container_name: profitpilot_frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+📄 db/init.sql
+sql
+Copy
+Edit
+CREATE TABLE IF NOT EXISTS sites (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    downtime_hours INT,
+    inventory_level INT,
+    maintenance_events INT
+);
+
+INSERT INTO sites (name, downtime_hours, inventory_level, maintenance_events) VALUES
+('Plant A', 120, 500, 12),
+('Plant B', 40, 800, 3),
+('Plant C', 75, 600, 7),
+('Plant D', 200, 300, 20),
+('Plant E', 30, 1000, 1);
+📄 backend/Dockerfile
+dockerfile
+Copy
+Edit
+FROM node:20
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 4000
+CMD ["npm", "start"]
+📄 backend/package.json
+json
+Copy
+Edit
+{
+  "name": "profitpilot-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "pg": "^8.11.1"
+  }
+}
+📄 backend/index.js
+javascript
+Copy
+Edit
+import express from 'express';
+import cors from 'cors';
+import pkg from 'pg';
+import axios from 'axios';
+
+const { Pool } = pkg;
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME
+});
+
+app.get('/api/sites', async (req, res) => {
+  const result = await pool.query('SELECT * FROM sites');
+  res.json(result.rows);
+});
+
+app.get('/api/predict', async (req, res) => {
+  const sites = await pool.query('SELECT * FROM sites');
+  const aiResponse = await axios.post(`${process.env.AI_SERVICE_URL}/predict`, { data: sites.rows });
+  res.json(aiResponse.data);
+});
+
+app.listen(4000, () => console.log('Backend running on port 4000'));
+📄 ai-service/Dockerfile
+dockerfile
+Copy
+Edit
+FROM python:3.11
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+📄 ai-service/requirements.txt
+nginx
+Copy
+Edit
+flask
+scikit-learn
+pandas
+📄 ai-service/app.py
+python
+Copy
+Edit
+from flask import Flask, request, jsonify
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
+app = Flask(__name__)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.json['data']
+    df = pd.DataFrame(data)
+
+    X = df[['inventory_level', 'maintenance_events']]
+    y = df['downtime_hours']
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    predictions = model.predict(X)
+    output = [{"site": row['name'], "risk": round(float(pred) / 200, 2)} for row, pred in zip(data, predictions)]
+
+    return jsonify(output)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+📄 frontend/Dockerfile
+dockerfile
+Copy
+Edit
+FROM node:20
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+📄 frontend/package.json
+json
+Copy
+Edit
+{
+  "name": "profitpilot-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.6.7",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "tailwindcss": "^3.4.0"
+  },
+  "scripts": {
+    "start": "react-scripts start"
+  }
+}
+📄 frontend/tailwind.config.js
+javascript
+Copy
+Edit
+module.exports = {
+  content: ["./src/**/*.{js,jsx}"],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+📄 frontend/src/index.js
+javascript
+Copy
+Edit
+import React from 'react';
+import ReactDOM from 'react-dom';
+import App from './App';
+import './index.css';
+
+ReactDOM.render(<App />, document.getElementById('root'));
+📄 frontend/src/App.js
+javascript
+Copy
+Edit
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+function App() {
+  const [sites, setSites] = useState([]);
+  const [predictions, setPredictions] = useState([]);
+
+  useEffect(() => {
+    axios.get('http://localhost:4000/api/sites').then(res => setSites(res.data));
+  }, []);
+
+  const handlePredict = () => {
+    axios.get('http://localhost:4000/api/predict').then(res => setPredictions(res.data));
+  };
+
+  return (
+    <div className="p-6 bg-gray-100 min-h-screen">
+      <h1 className="text-3xl font-bold mb-6">ProfitPilot Dashboard</h1>
+
+      <table className="table-auto border-collapse border border-gray-300 mb-6">
+        <thead>
+          <tr>
+            <th className="border px-4 py-2">Site</th>
+            <th className="border px-4 py-2">Downtime (hrs)</th>
+            <th className="border px-4 py-2">Inventory</th>
+            <th className="border px-4 py-2">Maintenance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sites.map((site, idx) => (
+            <tr key={idx}>
+              <td className="border px-4 py-2">{site.name}</td>
+              <td className="border px-4 py-2">{site.downtime_hours}</td>
+              <td className="border px-4 py-2">{site.inventory_level}</td>
+              <td className="border px-4 py-2">{site.maintenance_events}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <button onClick={handlePredict} className="bg-blue-600 text-white px-4 py-2 rounded">
+        Run AI Predictions
+      </button>
+
+      {predictions.length > 0 && (
+        <div className="mt-6">
+          <h2 className="text-2xl mb-4">Predictions</h2>
+          <ul>
+            {predictions.map((p, idx) => (
+              <li key={idx}>{p.site}: Risk {p.risk}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;
